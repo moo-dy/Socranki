@@ -171,12 +171,10 @@ class ConfigDialog(QDialog):
         self.box_height_spin.setValue(self.config.get("ui_box_height", 250))
         
         self.add_row_with_help(backend_layout, "API Key:", self.api_key_input, 
-            "Required for OpenAI or Gemini. Leave empty if using Ollama locally.\n\n"
-            "OpenAI keys start with 'sk-'.\nGemini keys are usually alphanumeric.")
+            "Required if using online AI models. Leave empty if using Ollama locally.")
             
         self.add_row_with_help(backend_layout, "Custom URL:", self.custom_url_input, 
-            "Optional: If you use OpenRouter, a local proxy, or a specific API endpoint, paste it here.\n\n"
-            "Example: https://openrouter.ai/api/v1/chat/completions")
+            "Optional: If you use OpenRouter, a local proxy, or a specific API endpoint, paste it here.")
             
         backend_layout.addRow("Detected Type:", self.backend_label)
         backend_layout.addRow("Model:", model_row)
@@ -225,8 +223,7 @@ class ConfigDialog(QDialog):
             "Set to a specific language (e.g. 'French') to force the AI to respond in that language.")
             
         self.add_row_with_help(behavior_layout, "Auto-Generate:", self.auto_generate_cb, 
-            "If enabled, Socranki starts generating the question as soon as you see the front of the card.\n\n"
-            "This makes the experience feel much faster, as the AI is often ready before you even reveal the answer!")
+            "If enabled, Socranki starts generating the question as soon as you see the front of the card.")
             
         self.ai_tagging_row = QHBoxLayout()
         self.ai_tagging_row.addWidget(self.enable_ai_tagging_cb, 1)
@@ -237,8 +234,8 @@ class ConfigDialog(QDialog):
         behavior_layout.addRow("AI Tagging:", self.ai_tagging_row)
 
         self.add_row_with_help(behavior_layout, "AI Personality:", self.personality_input, 
-            "Describe how the AI should behave.\n\n"
-            "Default is 'Socranki' (a helpful Socratic tutor). You can change it to 'Funny', 'Shakespearean', 'Strict Professor', etc.\n"
+            "Describe the desired AI behavior for the questions.\n\n"
+            "Default is 'Socranki'. You can describe whatever AI personality you want.\n"
             "(Limit: 250 characters)")
         
         self.interaction_combo.currentIndexChanged.connect(self.on_interaction_changed)

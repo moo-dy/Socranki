@@ -34,13 +34,29 @@ chat_history_html = ""
 is_generating = False
 
 def render_socratic_content(content: str, append: bool = False):
-    """Renders text as HTML in the AnkiWebView, ensuring MathJax support."""
+    """Renders text as HTML in the AnkiWebView, ensuring MathJax and Markdown support."""
     global chat_history_html
+    config = mw.addonManager.getConfig(__name__) or {}
+    font_size = config.get("ui_font_size", 14)
     
-    # Basic markdown-ish formatting
-    formatted = content.replace("\n", "<br>")
-    # Simple bolding **text** -> <b>text</b>
-    formatted = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", formatted)
+    # Protect MathJax tags from markdown parser
+    content = content.replace("\\[", "@@MATH_BLOCK_START@@")
+    content = content.replace("\\]", "@@MATH_BLOCK_END@@")
+    content = content.replace("\\(", "@@MATH_INLINE_START@@")
+    content = content.replace("\\)", "@@MATH_INLINE_END@@")
+    
+    try:
+        import markdown
+        formatted = markdown.markdown(content, extensions=['fenced_code', 'tables', 'sane_lists'])
+        # Restore MathJax tags
+        formatted = formatted.replace("@@MATH_BLOCK_START@@", "\\[")
+        formatted = formatted.replace("@@MATH_BLOCK_END@@", "\\]")
+        formatted = formatted.replace("@@MATH_INLINE_START@@", "\\(")
+        formatted = formatted.replace("@@MATH_INLINE_END@@", "\\)")
+    except ImportError:
+        # Fallback if markdown is somehow missing
+        formatted = content.replace("\n", "<br>")
+        formatted = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", formatted)
     
     new_block = f"<div style='margin-bottom: 10px;'>{formatted}</div>"
     
@@ -56,14 +72,16 @@ def render_socratic_content(content: str, append: bool = False):
         <style>
             body {{ 
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                font-size: 14px; 
+                font-size: {font_size}px; 
                 line-height: 1.5;
                 color: #d7d7d7;
                 background-color: #2c2c2c;
                 padding: 10px;
             }}
-            b {{ color: #007aff; }}
+            b, strong {{ color: #007aff; font-weight: bold; }}
             hr {{ border-color: #444; }}
+            pre {{ background-color: #1e1e1e; padding: 10px; border-radius: 5px; overflow-x: auto; }}
+            code {{ background-color: #1e1e1e; padding: 2px 4px; border-radius: 3px; font-family: monospace; color: #ff9d00; }}
         </style>
     </head>
     <body>
@@ -123,6 +141,24 @@ def fetch_ai_response(system_prompt: str, user_prompt: str, config: dict) -> str
             "generationConfig": {"temperature": 1.0}
         }
         headers = {"Content-Type": "application/json"}
+    elif backend_type == "anthropic":
+        if not model_name:
+            model_name = "claude-3-5-sonnet-20240620"
+        url = "https://api.anthropic.com/v1/messages"
+        payload = {
+            "model": model_name,
+            "max_tokens": 1024,
+            "system": system_prompt,
+            "messages": [
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 1.0
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
     else:
         return f"Error: Unknown backend_type '{backend_type}'"
         
@@ -139,6 +175,11 @@ def fetch_ai_response(system_prompt: str, user_prompt: str, config: dict) -> str
                     return result["candidates"][0]["content"]["parts"][0]["text"]
                 except (KeyError, IndexError):
                     return f"Error: Unexpected Gemini response format: {json.dumps(result)}"
+            elif backend_type == "anthropic":
+                try:
+                    return result["content"][0]["text"]
+                except (KeyError, IndexError):
+                    return f"Error: Unexpected Anthropic response format: {json.dumps(result)}"
             else:
                 return result.get("choices", [{}])[0].get("message", {}).get("content", "")
     except urllib.error.HTTPError as e:
@@ -152,17 +193,10 @@ def fetch_ai_response(system_prompt: str, user_prompt: str, config: dict) -> str
     except Exception as e:
         return f"Error: {str(e)}"
 
-def get_contextual_knowledge(current_card) -> str:
+def get_contextual_knowledge_bg(note_id, card_id, deck_id, tags, note_text) -> str:
     """Fetches up to 5 related notes based on explicit NID links, tags, or deck."""
-    if not current_card:
-        return ""
-        
-    current_note = current_card.note()
-    tags = current_note.tags
-    deck_id = current_card.did
-    
     seen_nids = set()
-    seen_nids.add(current_note.id)
+    seen_nids.add(note_id)
     
     context_strings = []
     
@@ -180,7 +214,6 @@ def get_contextual_knowledge(current_card) -> str:
             seen_nids.add(note.id)
 
     # 1. Search for explicit nid links in the current note
-    note_text = " ".join(current_note.values())
     explicit_nids = re.findall(r'nid[:\s]*(\d+)', note_text)
     
     print(f"[Socranki Debug] Detected {len(explicit_nids)} NID references: {explicit_nids}")
@@ -195,7 +228,7 @@ def get_contextual_knowledge(current_card) -> str:
                 rel_note = mw.col.get_note(nid)
                 if rel_note:
                     add_note_to_context(rel_note, "Linked")
-                    print(f"[Socranki Debug] Successfully linked note {nid}")
+
                 else:
                     print(f"[Socranki Debug] Note {nid} not found in collection.")
         except Exception as e:
@@ -204,7 +237,7 @@ def get_contextual_knowledge(current_card) -> str:
             
     # 2. Search for Backlinks (notes pointing to THIS note)
     if len(context_strings) < 5:
-        backlink_query = f"nid{current_note.id}"
+        backlink_query = f"nid{note_id}"
         backlink_nids = mw.col.find_notes(backlink_query)
         for bnid in backlink_nids:
             if len(context_strings) >= 5:
@@ -213,13 +246,13 @@ def get_contextual_knowledge(current_card) -> str:
                 try:
                     rel_note = mw.col.get_note(bnid)
                     add_note_to_context(rel_note, "Backlink")
-                    print(f"[Socranki Debug] Successfully found backlink: {bnid}")
+
                 except Exception:
                     continue
 
     # 3. Search by tags or deck
     query_parts = []
-    query_parts.append(f"-cid:{current_card.id}")
+    query_parts.append(f"-cid:{card_id}")
     
     if tags:
         tag_query = " OR ".join([f"tag:{t}" for t in tags])
@@ -249,19 +282,30 @@ def get_contextual_knowledge(current_card) -> str:
     return "Contextual Knowledge:\n" + "\n".join(context_strings)
 
 def get_bloom_prompt(card) -> tuple[str, str]:
-    """Determines Bloom's Taxonomy level based on card scheduling metadata."""
+    """Determines Bloom's Taxonomy level based on card scheduling metadata and comprehension tags."""
     card_type = card.type
     ivl = card.ivl
+    note = card.note()
+    
+    needs_comprehension = note.has_tag("needs_comprehension")
     
     if card_type in [0, 1, 3]:
         level_name = "Understanding"
         system_prompt = "Based on the concept, ask the user to explain it simply or summarize the core mechanism in their own words."
     elif card_type == 2 and ivl < 21:
-        level_name = "Applying"
-        system_prompt = "Invent a brief, novel real-world scenario. Ask the user how this concept applies to solve the scenario."
+        if needs_comprehension:
+            level_name = "Understanding (Adapted)"
+            system_prompt = "The user previously struggled with this concept. Break it down to basics. Ask the user to explain it simply or summarize the core mechanism in their own words."
+        else:
+            level_name = "Applying"
+            system_prompt = "Invent a brief, novel real-world scenario. Ask the user how this concept applies to solve the scenario."
     else: # card_type == 2 and ivl >= 21
-        level_name = "Analyzing"
-        system_prompt = "Using the card context and related knowledge, ask a question that forces the user to compare/contrast this concept, or identify a flaw in a related argument."
+        if needs_comprehension:
+            level_name = "Applying (Adapted)"
+            system_prompt = "The user previously struggled with this concept. Let's practice application. Invent a brief, novel real-world scenario and ask how the concept applies to it."
+        else:
+            level_name = "Analyzing"
+            system_prompt = "Using the card context and related knowledge, ask a question that forces the user to compare/contrast this concept, or identify a flaw in a related argument."
         
     return level_name, system_prompt
 
@@ -282,15 +326,18 @@ def on_generate_clicked():
     front_text = strip_html(front_raw).strip()
     back_text = strip_html(back_raw).strip()
     
-    output = f"--- Front ---\n{front_text}\n\n--- Back ---\n{back_text}"
+    # Extract static variables for background processing
+    note_id = note.id
+    card_id = mw.reviewer.card.id
+    deck_id = mw.reviewer.card.did
+    tags = note.tags
+    note_text = " ".join(note.values())
     
-    # Phase 3: Fetch related contextual knowledge
-    context_knowledge = get_contextual_knowledge(mw.reviewer.card)
-    if context_knowledge:
-        output += f"\n\n--- Context ---\n{context_knowledge}"
+    output = f"--- Front ---\n{front_text}\n\n--- Back ---\n{back_text}"
+
     # Phase 4: Bloom's Taxonomy Logic
     bloom_level, bloom_prompt = get_bloom_prompt(mw.reviewer.card)
-    print(f"\n[Socratic Anki] Bloom's Level Detected: {bloom_level}")
+
     config = mw.addonManager.getConfig(__name__) or {}
     mode = config.get("interaction_mode", "chit_chat")
     
@@ -303,17 +350,32 @@ def on_generate_clicked():
     angle = random.choice(SOCRATIC_ANGLES)
     variation_instruction = f"Be creative and approach the topic from this angle: {angle} Avoid repeating previous questions."
     
+    personality = config.get("ai_personality", "Socranki")
+    
     # Phase 5: Assembly
+    strict_rules = (
+        "STRICT RULES:\n"
+        "1. NEVER introduce yourself or say hello.\n"
+        "2. Keep your questions extremely concise (maximum 1-2 short sentences).\n"
+        "3. Be highly specific and pertinent to the card content. Avoid vague, open-ended philosophical questions.\n"
+        "4. DO NOT use conversational filler.\n"
+        "5. EXACTLY ONE QUESTION: You must ask ONLY one single question. Do not provide multiple questions or options."
+    )
+    
     if mode == "one_liner":
         system_prompt = (
-            f"You are a Socratic tutor. {lang_instruction} {variation_instruction} You primarily ask follow-up questions to deepen understanding. You provide a single follow-up question and its ideal answer in the exact format:\n"
-            "QUESTION: [your question here]\n"
-            "ANSWER: [the ideal answer here]\n"
+            f"You are {personality}, a Socratic tutor. {lang_instruction} {variation_instruction}\n"
+            f"{strict_rules}\n\n"
+            "You primarily ask follow-up questions to deepen understanding. You provide a single follow-up question and its ideal answer in the exact format:\n"
+            "QUESTION: [your concise question here]\n"
+            "ANSWER: [the ideal concise answer here]\n"
             f"{bloom_prompt}"
         )
     else:
         system_prompt = (
-            f"You are a Socratic tutor. {lang_instruction} {variation_instruction} You primarily ask one short, single follow-up question. Never give the answer immediately in the first turn, but be encouraging.\n"
+            f"You are {personality}, a Socratic tutor. {lang_instruction} {variation_instruction}\n"
+            f"{strict_rules}\n\n"
+            "You primarily ask one short, single follow-up question. Never give the answer immediately in the first turn.\n"
             f"{bloom_prompt}"
         )
     
@@ -321,20 +383,6 @@ def on_generate_clicked():
         f"Current Card Front: {front_text}\n"
         f"Current Card Back: {back_text}\n"
     )
-    if context_knowledge:
-        user_prompt += f"\nRelated Knowledge:\n{context_knowledge}"
-        
-    # Inject a unique nonce to force LLM variance
-    nonce = int(time.time() * 1000)
-    user_prompt += f"\n\n[Variation Seed: {nonce}]"
-    # noice    
-    current_context = user_prompt
-        
-    # Also print to Anki's debug console / terminal
-    print("\n[Socranki] System Prompt:")
-    print(system_prompt)
-    print("\n[Socranki] User Prompt:")
-    print(user_prompt)
     
     socratic_button.setEnabled(False)
     render_socratic_content(f"<i>Generating {bloom_level} question...</i>")
@@ -344,13 +392,28 @@ def on_generate_clicked():
     is_generating = True
         
     def background_task():
-        return fetch_ai_response(system_prompt, user_prompt, config)
+        # Move heavy DB search off the main thread
+        context_knowledge = get_contextual_knowledge_bg(note_id, card_id, deck_id, tags, note_text)
+        
+        final_user_prompt = user_prompt
+        if context_knowledge:
+            final_user_prompt += f"\nRelated Knowledge:\n{context_knowledge}"
+            
+        nonce = int(time.time() * 1000)
+        final_user_prompt += f"\n\n[Variation Seed: {nonce}]"
+        
+
+        
+        ai_response = fetch_ai_response(system_prompt, final_user_prompt, config)
+        return ai_response, final_user_prompt
         
     def on_done(future):
-        global is_generating, current_hidden_answer, current_ai_question
+        global is_generating, current_hidden_answer, current_ai_question, current_context
         socratic_button.setEnabled(True)
         try:
-            result = future.result()
+            result, final_prompt = future.result()
+            current_context = final_prompt
+            
             if mode == "one_liner":
                 q_part = result
                 a_part = ""
@@ -411,10 +474,25 @@ def on_action_clicked():
         else:
             lang_instruction = f"Respond in {target_lang}."
             
+        personality = config.get("ai_personality", "Socranki")
+        tagging_enabled = config.get("enable_ai_tagging", False)
+        
+        tag_instruction = ""
+        if tagging_enabled:
+            tag_instruction = (
+                "\n\nIMPORTANT INSTRUCTION: You MUST evaluate the user's comprehension. "
+                "If their answer demonstrates solid understanding, append EXACTLY '[TAG: good_comprehension]' to the very end of your response. "
+                "If their answer is wrong, confused, or they ask for help, append EXACTLY '[TAG: needs_comprehension]' to the very end of your response."
+            )
+
         system_prompt = (
-            f"The user has provided an answer to your previous Socratic question. {lang_instruction} "
-            "Evaluate it based on the flashcard context. Be encouraging but correct any misconceptions. Keep it brief. "
-            "If the user asks for help, says they don't know, or seems genuinely stuck after an attempt, you should provide a hint or the full answer to maintain learning momentum."
+            f"You are {personality}, a Socratic tutor. The user has provided an answer to your previous Socratic question. {lang_instruction}\n"
+            "STRICT RULES FOR EVALUATION:\n"
+            "1. DO NOT applaud, praise, or sugarcoat. Avoid words like 'Great job!', 'Excellent!', or 'Spot on!'.\n"
+            "2. Be direct, clinical, and extremely concise (1-2 sentences max).\n"
+            "3. Evaluate the answer based on the flashcard context. Correct any misconceptions immediately.\n"
+            "4. If the user asks for help, says they don't know, or seems genuinely stuck, provide a brief hint or the exact answer.\n"
+            f"{tag_instruction}"
         )
         
         eval_prompt = (
@@ -432,6 +510,30 @@ def on_action_clicked():
             socratic_input.clear()
             try:
                 result = future.result()
+                
+                # Parse AI Tags
+                detected_tag = None
+                if "[TAG: good_comprehension]" in result:
+                    detected_tag = "good_comprehension"
+                    result = result.replace("[TAG: good_comprehension]", "").strip()
+                elif "[TAG: needs_comprehension]" in result:
+                    detected_tag = "needs_comprehension"
+                    result = result.replace("[TAG: needs_comprehension]", "").strip()
+                
+                # Apply tag if enabled
+                tagging_enabled = config.get("enable_ai_tagging", False)
+                if tagging_enabled and detected_tag and mw.reviewer.card:
+                    note = mw.reviewer.card.note()
+                    # Remove conflicting tags
+                    if detected_tag == "good_comprehension" and note.has_tag("needs_comprehension"):
+                        note.remove_tag("needs_comprehension")
+                    elif detected_tag == "needs_comprehension" and note.has_tag("good_comprehension"):
+                        note.remove_tag("good_comprehension")
+                        
+                    if not note.has_tag(detected_tag):
+                        note.add_tag(detected_tag)
+                        mw.col.update_note(note)
+                        
                 render_socratic_content(f"<b>Tutor:</b> {result}", append=True)
             except Exception as e:
                 render_socratic_content(f"<b>Task Failed:</b> {str(e)}", append=True)
@@ -456,18 +558,67 @@ def setup_ui():
     # Initialize button
     socratic_button = QPushButton("Generate follow-up question")
     socratic_button.clicked.connect(on_generate_clicked)
+    socratic_button.setStyleSheet("""
+        QPushButton {
+            background-color: #3a3a3a;
+            color: #eee;
+            border: 1px solid #555;
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #4a4a4a;
+        }
+    """)
+    
+    config = mw.addonManager.getConfig(__name__) or {}
+    box_height = config.get("ui_box_height", 250)
     
     # Initialize web view
     socratic_text_edit = AnkiWebView()
+    socratic_text_edit.setMinimumHeight(box_height)
     render_socratic_content("<i>Socratic question will appear here...</i>")
     
     socratic_input = QLineEdit()
     socratic_input.setPlaceholderText("Type your answer here...")
     socratic_input.returnPressed.connect(on_action_clicked)
+    socratic_input.setStyleSheet("""
+        QLineEdit {
+            background-color: #333;
+            color: #eee;
+            border: 1px solid #555;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 15px;
+        }
+        QLineEdit:focus {
+            border: 1px solid #007aff;
+        }
+    """)
     socratic_input.hide()
     
     socratic_action_button = QPushButton("Action")
     socratic_action_button.clicked.connect(on_action_clicked)
+    socratic_action_button.setStyleSheet("""
+        QPushButton {
+            background-color: #007aff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 15px;
+            font-weight: bold;
+        }
+        QPushButton:hover {
+            background-color: #006ce6;
+        }
+        QPushButton:disabled {
+            background-color: #555;
+            color: #888;
+        }
+    """)
     socratic_action_button.hide()
     
     layout.addWidget(socratic_button)
@@ -533,6 +684,11 @@ def on_show_question():
         if config.get("auto_generate", False):
             on_generate_clicked()
 
+def on_reviewer_will_end():
+    """Cleanly hides the UI without triggering background generation."""
+    if socratic_dock:
+        socratic_dock.hide()
+
 def on_profile_loaded():
     """Setup UI once the user profile is loaded."""
     setup_ui()
@@ -547,7 +703,7 @@ gui_hooks.reviewer_did_show_answer.append(lambda card: on_show_answer())
 
 # Hooks to hide our elements when moving away from the answer side
 gui_hooks.reviewer_did_show_question.append(lambda card: on_show_question())
-gui_hooks.reviewer_will_end.append(on_show_question)
+gui_hooks.reviewer_will_end.append(on_reviewer_will_end)
 
 # Register custom config UI
 def open_config():

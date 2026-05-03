@@ -2,5 +2,12 @@
     "backend_type": "ollama",
     "api_key": "",
     "model_name": "phi3",
-    "custom_api_url": ""
+    "custom_api_url": "",
+    "interaction_mode": "chit_chat",
+    "auto_generate": false,
+    "target_language": "auto",
+    "ai_personality": "Socranki",
+    "enable_ai_tagging": false,
+    "ui_font_size": 14,
+    "ui_box_height": 250
 }

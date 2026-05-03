@@ -39,16 +39,12 @@ def render_socratic_content(content: str, append: bool = False):
     config = mw.addonManager.getConfig(__name__) or {}
     font_size = config.get("ui_font_size", 14)
     
-    # Convert standard LLM math delimiters ($ and $$) to Anki's native delimiters
-    # We will map these directly to our protected placeholders
+    # Protect MathJax tags from being mangled by the Markdown parser
+    # Support all common styles: $$, $, \[, and \(
     content = re.sub(r'\$\$(.*?)\$\$', r'@@MATH_BLOCK_START@@\1@@MATH_BLOCK_END@@', content, flags=re.DOTALL)
     content = re.sub(r'\$([^$]+)\$', r'@@MATH_INLINE_START@@\1@@MATH_INLINE_END@@', content)
-    
-    # Protect MathJax tags from markdown parser
-    content = content.replace("\\[", "@@MATH_BLOCK_START@@")
-    content = content.replace("\\]", "@@MATH_BLOCK_END@@")
-    content = content.replace("\\(", "@@MATH_INLINE_START@@")
-    content = content.replace("\\)", "@@MATH_INLINE_END@@")
+    content = content.replace("\\[", "@@MATH_BLOCK_START@@").replace("\\]", "@@MATH_BLOCK_END@@")
+    content = content.replace("\\(", "@@MATH_INLINE_START@@").replace("\\)", "@@MATH_INLINE_END@@")
     
     try:
         import markdown
@@ -58,7 +54,7 @@ def render_socratic_content(content: str, append: bool = False):
         formatted = content.replace("\n", "<br>")
         formatted = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", formatted)
         
-    # Restore MathJax tags to standard LaTeX delimiters
+    # Restore delimiters to standard LaTeX style for the browser-side MathJax engine
     formatted = formatted.replace("@@MATH_BLOCK_START@@", "\\[")
     formatted = formatted.replace("@@MATH_BLOCK_END@@", "\\]")
     formatted = formatted.replace("@@MATH_INLINE_START@@", "\\(")
@@ -91,8 +87,8 @@ def render_socratic_content(content: str, append: bool = False):
     <script>
     MathJax = {{
       tex: {{
-        inlineMath: [['\\\\(', '\\\\)']],
-        displayMath: [['\\\\[', '\\\\]']]
+        inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+        displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
       }},
       startup: {{
         typeset: false
@@ -240,8 +236,6 @@ def get_contextual_knowledge_bg(note_id, card_id, deck_id, tags, note_text) -> s
     # 1. Search for explicit nid links in the current note
     explicit_nids = re.findall(r'nid[:\s]*(\d+)', note_text)
     
-    print(f"[Socranki Debug] Detected {len(explicit_nids)} NID references: {explicit_nids}")
-    
     for nid_str in explicit_nids:
         if len(context_strings) >= 5:
             break
@@ -253,10 +247,7 @@ def get_contextual_knowledge_bg(note_id, card_id, deck_id, tags, note_text) -> s
                 if rel_note:
                     add_note_to_context(rel_note, "Linked")
 
-                else:
-                    print(f"[Socranki Debug] Note {nid} not found in collection.")
-        except Exception as e:
-            print(f"[Socranki Debug] Failed to fetch linked note {nid_str}: {str(e)}")
+        except Exception:
             continue
             
     # 2. Search for Backlinks (notes pointing to THIS note)
@@ -359,7 +350,7 @@ def on_generate_clicked():
     
     output = f"--- Front ---\n{front_text}\n\n--- Back ---\n{back_text}"
 
-    # Phase 4: Bloom's Taxonomy Logic
+    # Bloom's Taxonomy Logic
     bloom_level, bloom_prompt = get_bloom_prompt(mw.reviewer.card)
 
     config = mw.addonManager.getConfig(__name__) or {}
@@ -376,7 +367,7 @@ def on_generate_clicked():
     
     personality = config.get("ai_personality", "Socranki")
     
-    # Phase 5: Assembly
+    # Assembly
     strict_rules = (
         "STRICT RULES:\n"
         "1. NEVER introduce yourself or say hello.\n"
@@ -384,7 +375,7 @@ def on_generate_clicked():
         "3. Be highly specific and pertinent to the card content. Avoid vague, open-ended philosophical questions.\n"
         "4. DO NOT use conversational filler.\n"
         "5. EXACTLY ONE QUESTION: You must ask ONLY one single question. Do not provide multiple questions or options.\n"
-        "6. MATH FORMATTING: If writing math/equations, you MUST use \\( and \\) for inline math, and \\[ and \\] for block math. NEVER use $ or $$."
+        "6. MATH FORMATTING: If writing math or equations, you MUST use $ for inline math and $$ for block math. NEVER mix styles or use \(."
     )
     
     if mode == "one_liner":

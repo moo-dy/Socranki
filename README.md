@@ -5,7 +5,7 @@ Socranki is an AI-powered add-on that transforms your Anki review sessions into 
 ![Socranki Demo](./demo.png)
 
 ## Key Features
-- **Socratic dialogue**: Generates follow-up questions based on Bloom's Taxonomy (Understanding, Applying, Analyzing).
+- **Socratic dialogue**: Generates pertinent follow-up questions by gathering context (similar tagged cards, [connected cards by `nid`](https://ankiweb.net/shared/info/1077002392), surrounding cards). Question complexity is based on current card's age by following Bloom's Taxonomy (Understanding, Applying, Analyzing).
 - **Interactive evaluation (Chit-Chat)**: Submit your answers to the AI for clinical, direct feedback.
 - **Auto-adaptation**: Automatically tags cards based on your performance (`good_comprehension` or `needs_comprehension`) and adjusts the difficulty of future questions.
 - **Flexible backends**: Supports local LLMs (Ollama) as well as APIs (OpenAI, Gemini, and compatibles)

@@ -39,6 +39,11 @@ def render_socratic_content(content: str, append: bool = False):
     config = mw.addonManager.getConfig(__name__) or {}
     font_size = config.get("ui_font_size", 14)
     
+    # Convert standard LLM math delimiters ($ and $$) to Anki's native delimiters
+    # We will map these directly to our protected placeholders
+    content = re.sub(r'\$\$(.*?)\$\$', r'@@MATH_BLOCK_START@@\1@@MATH_BLOCK_END@@', content, flags=re.DOTALL)
+    content = re.sub(r'\$([^$]+)\$', r'@@MATH_INLINE_START@@\1@@MATH_INLINE_END@@', content)
+    
     # Protect MathJax tags from markdown parser
     content = content.replace("\\[", "@@MATH_BLOCK_START@@")
     content = content.replace("\\]", "@@MATH_BLOCK_END@@")
@@ -48,15 +53,16 @@ def render_socratic_content(content: str, append: bool = False):
     try:
         import markdown
         formatted = markdown.markdown(content, extensions=['fenced_code', 'tables', 'sane_lists'])
-        # Restore MathJax tags
-        formatted = formatted.replace("@@MATH_BLOCK_START@@", "\\[")
-        formatted = formatted.replace("@@MATH_BLOCK_END@@", "\\]")
-        formatted = formatted.replace("@@MATH_INLINE_START@@", "\\(")
-        formatted = formatted.replace("@@MATH_INLINE_END@@", "\\)")
     except ImportError:
         # Fallback if markdown is somehow missing
         formatted = content.replace("\n", "<br>")
         formatted = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", formatted)
+        
+    # Restore MathJax tags to standard LaTeX delimiters
+    formatted = formatted.replace("@@MATH_BLOCK_START@@", "\\[")
+    formatted = formatted.replace("@@MATH_BLOCK_END@@", "\\]")
+    formatted = formatted.replace("@@MATH_INLINE_START@@", "\\(")
+    formatted = formatted.replace("@@MATH_INLINE_END@@", "\\)")
     
     new_block = f"<div style='margin-bottom: 10px;'>{formatted}</div>"
     
@@ -65,34 +71,52 @@ def render_socratic_content(content: str, append: bool = False):
     else:
         chat_history_html = new_block
         
-    # Wrap in Anki's standard CSS for dark mode compatibility
-    full_html = f"""
-    <html>
-    <head>
-        <style>
-            body {{ 
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                font-size: {font_size}px; 
-                line-height: 1.5;
-                color: #d7d7d7;
-                background-color: #2c2c2c;
-                padding: 10px;
-            }}
-            b, strong {{ color: #007aff; font-weight: bold; }}
-            hr {{ border-color: #444; }}
-            pre {{ background-color: #1e1e1e; padding: 10px; border-radius: 5px; overflow-x: auto; }}
-            code {{ background-color: #1e1e1e; padding: 2px 4px; border-radius: 3px; font-family: monospace; color: #ff9d00; }}
-        </style>
-    </head>
-    <body>
-        {chat_history_html}
-    </body>
-    </html>
+    # Combine CSS and content without manually wrapping in <html> tags
+    # so we can use stdHtml which injects Anki's MathJax scripts automatically.
+    custom_css = f"""
+    <style>
+        body {{ 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: {font_size}px; 
+            line-height: 1.5;
+            color: #d7d7d7;
+            background-color: #2c2c2c;
+            padding: 10px;
+        }}
+        b, strong {{ color: #007aff; font-weight: bold; }}
+        hr {{ border-color: #444; }}
+        pre {{ background-color: #1e1e1e; padding: 10px; border-radius: 5px; overflow-x: auto; }}
+        code {{ background-color: #1e1e1e; padding: 2px 4px; border-radius: 3px; font-family: monospace; color: #ff9d00; }}
+    </style>
+    <script>
+    MathJax = {{
+      tex: {{
+        inlineMath: [['\\\\(', '\\\\)']],
+        displayMath: [['\\\\[', '\\\\]']]
+      }},
+      startup: {{
+        typeset: false
+      }}
+    }};
+    </script>
+    <script id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+    <script>
+      // Trigger typesetting slightly after load to ensure MathJax is ready
+      setTimeout(function() {{
+          if (typeof MathJax !== 'undefined' && MathJax.typesetPromise) {{
+              MathJax.typesetPromise();
+          }}
+      }}, 50);
+    </script>
     """
     
-    # mw.prepare_card_text_for_display handles MathJax \[ \] and \( \)
-    final_html = mw.prepare_card_text_for_display(full_html)
-    socratic_text_edit.setHtml(final_html)
+    full_html = custom_css + chat_history_html
+    
+    # We use setHtml to render our complete document including the MathJax CDN
+    try:
+        socratic_text_edit.setHtml(f"<html><head>{custom_css}</head><body>{chat_history_html}</body></html>")
+    except Exception:
+        pass
 
 def fetch_ai_response(system_prompt: str, user_prompt: str, config: dict) -> str:
     backend_type = config.get("backend_type", "ollama")
@@ -359,7 +383,8 @@ def on_generate_clicked():
         "2. Keep your questions extremely concise (maximum 1-2 short sentences).\n"
         "3. Be highly specific and pertinent to the card content. Avoid vague, open-ended philosophical questions.\n"
         "4. DO NOT use conversational filler.\n"
-        "5. EXACTLY ONE QUESTION: You must ask ONLY one single question. Do not provide multiple questions or options."
+        "5. EXACTLY ONE QUESTION: You must ask ONLY one single question. Do not provide multiple questions or options.\n"
+        "6. MATH FORMATTING: If writing math/equations, you MUST use \\( and \\) for inline math, and \\[ and \\] for block math. NEVER use $ or $$."
     )
     
     if mode == "one_liner":

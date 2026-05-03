@@ -1,0 +1,6 @@
+{
+    "backend_type": "ollama",
+    "api_key": "",
+    "model_name": "phi3",
+    "custom_api_url": ""
+}

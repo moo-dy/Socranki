@@ -203,16 +203,20 @@ class ConfigDialog(QDialog):
         self.language_input.setPlaceholderText("'auto' or language name")
         self.language_input.setText(self.config.get("target_language", "auto"))
         
-        self.auto_generate_cb = QCheckBox("Enabled")
+        self.auto_generate_cb = QCheckBox("")
         self.auto_generate_cb.setChecked(self.config.get("auto_generate", False))
         
+        self.enable_ai_tagging_cb = QCheckBox("")
+        self.enable_ai_tagging_cb.setChecked(self.config.get("enable_ai_tagging", False))
+        
+        self.auto_show_cb = QCheckBox("")
+        self.auto_show_cb.setChecked(self.config.get("auto_show_window", False))
+
         self.personality_input = QLineEdit()
         self.personality_input.setPlaceholderText("e.g. Socranki, funny, strict...")
         self.personality_input.setText(self.config.get("ai_personality", "Socranki"))
         self.personality_input.setMaxLength(250)
         
-        self.enable_ai_tagging_cb = QCheckBox("Enable AI Tagging")
-        self.enable_ai_tagging_cb.setChecked(self.config.get("enable_ai_tagging", False))
         
         self.add_row_with_help(behavior_layout, "Interaction Mode:", self.interaction_combo, 
             "Chit-Chat: Interactive chat where the AI evaluates your answer.\n\n"
@@ -232,6 +236,8 @@ class ConfigDialog(QDialog):
             "Future questions will adapt in complexity based on these tags."
         ), 0)
         behavior_layout.addRow("AI Tagging:", self.ai_tagging_row)
+
+        behavior_layout.addRow("Auto-show Window:", self.auto_show_cb)
 
         self.add_row_with_help(behavior_layout, "AI Personality:", self.personality_input, 
             "Describe the desired AI behavior for the questions.\n\n"
@@ -350,6 +356,7 @@ class ConfigDialog(QDialog):
         self.config["ai_personality"] = self.personality_input.text().strip() or "Socranki"
         self.config["ui_font_size"] = self.font_size_spin.value()
         self.config["ui_box_height"] = self.box_height_spin.value()
+        self.config["auto_show_window"] = self.auto_show_cb.isChecked()
         
         if self.config["model_name"].startswith("Error:") or self.config["model_name"] in ["Fetching models...", "No models found"]:
             self.config["model_name"] = ""

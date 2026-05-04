@@ -1,3 +1,4 @@
+from typing import Any
 from aqt import mw, gui_hooks
 from aqt.qt import *
 from aqt.webview import AnkiWebView
@@ -662,13 +663,50 @@ def setup_ui():
     # Add to Anki's main window at the bottom
     mw.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, socratic_dock)
 
+def inject_summon_button():
+    """Injects a sober summon button at the bottom of the card content."""
+
+    button_html = """
+    <div id='socranki-summon-wrapper' style='text-align: center; margin-top: 30px; clear: both; opacity: 0.8;'>
+        <button onclick='pycmd("socranki_summon")' style='
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 4px;
+            color: #888;
+            padding: 4px 16px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        ' onmouseover='this.style.background="rgba(255,255,255,0.1)"; this.style.color="#ccc";'
+          onmouseout='this.style.background="rgba(255,255,255,0.05)"; this.style.color="#888";'>
+            Show Socranki
+        </button>
+    </div>
+    """
+    
+    js = f"""
+    (function() {{
+        var existing = document.getElementById("socranki-summon-wrapper");
+        if (existing) existing.remove();
+        document.body.insertAdjacentHTML('beforeend', `{button_html}`);
+    }})();
+    """
+    # Inject into the main card webview, NOT the bottom bar
+    mw.reviewer.web.eval(js)
+
 def on_show_answer():
     """Triggered when the back of the card is revealed."""
     if socratic_dock:
         config = mw.addonManager.getConfig(__name__) or {}
         is_auto = config.get("auto_generate", False)
+        auto_show = config.get("auto_show_window", False)
         
-        socratic_dock.show()
+        if auto_show:
+            socratic_dock.show()
+        else:
+            # Only show the summon button if auto-show is OFF
+            inject_summon_button()
         
         # Only clear if we aren't auto-generating (since auto-gen already started on the front)
         if not is_auto:
@@ -709,8 +747,20 @@ def on_profile_loaded():
     """Setup UI once the user profile is loaded."""
     setup_ui()
 
+def on_js_message(handled: tuple[bool, Any], message: str, context: Any):
+    """Handles the summon button click from the reviewer's JS."""
+    if message == "socranki_summon":
+        if socratic_dock:
+            socratic_dock.show()
+            socratic_dock.raise_()
+        return (True, None)
+    return handled
+
 # Hooks registration
  
+# Hook to handle JS messages from the reviewer
+gui_hooks.webview_did_receive_js_message.append(on_js_message)
+
 # Hook to set up the UI elements on startup
 gui_hooks.profile_did_open.append(on_profile_loaded)
 

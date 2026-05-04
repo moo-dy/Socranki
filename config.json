@@ -9,5 +9,7 @@
     "ai_personality": "Socranki",
     "enable_ai_tagging": false,
     "ui_font_size": 14,
-    "ui_box_height": 250
+    "ui_box_height": 250,
+    "auto_show_window": false,
+    "show_summon_button": true
 }
